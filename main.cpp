@@ -5,6 +5,7 @@
 
 //C++ libraries
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <iostream>
@@ -18,6 +19,11 @@
 
 //Preprocessor defines
 //# define VIDEO
+
+//Type of detections involved
+#define VJ_HOG_DETECTION 1
+#define VJ_DETECTION 2
+#define HOG_DETECTION 3
 
 //Namespaces
 using namespace cv;
@@ -59,11 +65,26 @@ void DetectPedestrianViolaJones(vector<Rect> &pedestrian_vector){
     cout << "Peatón detectado VJ= " << Mat(pedestrian_vector) << endl << endl;
 	else
 		cout<<"Vacio"<<endl;
+
+	//Increase detection window size to try to improve HOG detection
+	for( size_t i = 0; i < pedestrian_vector.size(); i++ ){
+		if ((pedestrian_vector[i].x+cvRound(pedestrian_vector[i].width*1.2))<gray_frame.cols && (pedestrian_vector[i].x-cvRound(pedestrian_vector[i].width*0.2))>0){
+			pedestrian_vector[i].x-=cvRound(pedestrian_vector[i].width*0.1);
+			pedestrian_vector[i].width = cvRound(pedestrian_vector[i].width*1.2);
+		}
+		if ((pedestrian_vector[i].y+cvRound(pedestrian_vector[i].height*1.2))<gray_frame.rows && (pedestrian_vector[i].y-cvRound(pedestrian_vector[i].height*0.2))>0){
+			pedestrian_vector[i].y-=cvRound(pedestrian_vector[i].height*0.1);
+			pedestrian_vector[i].height = cvRound(pedestrian_vector[i].height*1.2);
+		}
+	}
+	cout << "Peatón detectado VJp= " << Mat(pedestrian_vector) << endl << endl;
 }
 
 
+
+
 void DetectPedestrianHOG(vector<Rect> VJ_pedestrian_vector, vector<Rect> &pedestrian_vector, HOGDescriptor hog){
-	//To avoid the rectangles to remain on the video
+	//To avoid the rectangles to remain on sucesive frames
 	if(VJ_pedestrian_vector.empty())
 		pedestrian_vector.clear();
 
@@ -76,13 +97,20 @@ void DetectPedestrianHOG(vector<Rect> VJ_pedestrian_vector, vector<Rect> &pedest
 			if (!pedestrian_vector.empty()){
 				//We update the "global" pedestrian detector calculating the coordinates from the big image origin
 				pedestrian_vector[i]=Rect(pedestrian_vector[0].x+VJ_pedestrian_vector[i].x, pedestrian_vector[0].y+VJ_pedestrian_vector[i].y,
-						pedestrian_vector[0].width, pedestrian_vector[0].height);
+						pedestrian_vector[0].width*1.1, pedestrian_vector[0].height*1.1);
 				cout << "Peatón detectado HOG= " << Mat(pedestrian_vector) << endl << endl;
 			}
 		}
 	}
 }
 
+void DetectPedestrianHOGnotROI(vector<Rect> &pedestrian_vector, HOGDescriptor hog){
+
+
+
+			hog.detectMultiScale(gray_frame, pedestrian_vector, 0, Size(8,8), Size(0,0),1.05, 2);
+
+}
 
 void DrawPedestrians(vector<Rect> pedestrian_vector){
 	/*Dibuja el rectángulo alrededor del supuesto peatón en la ventana de vídeo
@@ -97,6 +125,33 @@ void DrawPedestrians(vector<Rect> pedestrian_vector){
 	}
 }
 
+void SaveImage(vector<Rect> pedestrian_vector, int detector, int num_pedestrian){
+	Mat pedestrian;
+	char image_number[12];
+	string result_path;
+	for (size_t i = 0; i<pedestrian_vector.size();i++){
+		pedestrian=gray_frame(pedestrian_vector[i]);
+		switch (detector){
+		case VJ_DETECTION:
+			result_path="Pedestrians/VJ/";
+			sprintf(image_number,"%010d",(int)(num_pedestrian+i));
+			imwrite( result_path+(string)image_number+".jpg", pedestrian );
+			break;
+		case VJ_HOG_DETECTION:
+			result_path="Pedestrians/VJ_HOG/";
+			sprintf(image_number,"%010d",(int)(num_pedestrian+i));
+			imwrite( result_path+(string)image_number+".jpg", pedestrian );
+			break;
+		case HOG_DETECTION:
+			result_path="Pedestrians/HOG/";
+			sprintf(image_number,"%010d",(int)(num_pedestrian+i));
+			imwrite( result_path+(string)image_number+".jpg", pedestrian );
+			break;
+
+		}
+
+	}
+}
 
 
 int main(int argc, char** argv){
@@ -143,10 +198,11 @@ int main(int argc, char** argv){
 		vector<Rect> pedestrianVJ;	//Rectangles around each pedestrian (Viola-Jones Module)
 		vector<Rect> pedestrian;	//Rectangles around each pedestrian (HOG module)
 
-		int i;
+		int i, num_pedestrian_VJ=0, num_pedestrian_VJ_HOG=0, num_pedestrian_HOG;
 		string path="Video/Peatones/";
-		char* image_number;
+		char image_number[12];
 		string image_name;
+		string image_dimensions;
 
 
 
@@ -157,6 +213,9 @@ int main(int argc, char** argv){
 			cout<<path<<image_number<<".png"<<endl;
 			image_name=path+(string)image_number+".png";
 			gray_frame = imread(image_name.c_str(), IMREAD_GRAYSCALE);
+			printf("Image cols %d \t",gray_frame.cols);
+			printf("Image rows %d\n",gray_frame.rows);
+
 
 		    if( gray_frame.empty() )                      // Check for invalid input
 		    {
@@ -167,7 +226,15 @@ int main(int argc, char** argv){
 
 			DetectPedestrianViolaJones(pedestrianVJ);
 			DetectPedestrianHOG(pedestrianVJ, pedestrian, hog);
-			DrawPedestrians(pedestrian);
+		    //DetectPedestrianHOGnotROI(pedestrian, hog);
+			//DrawPedestrians(pedestrianVJ);
+			//SaveImage(pedestrianVJ,VJ_DETECTION, num_pedestrian_VJ);
+			SaveImage(pedestrian,VJ_HOG_DETECTION, num_pedestrian_VJ_HOG);
+		    //SaveImage(pedestrian,HOG_DETECTION, num_pedestrian_HOG);
+			//num_pedestrian_VJ+=pedestrianVJ.size();
+			num_pedestrian_VJ_HOG+=pedestrian.size();
+		    //num_pedestrian_HOG+=pedestrian.size();
+
 #endif
 
 
