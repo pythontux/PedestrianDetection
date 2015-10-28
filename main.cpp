@@ -65,7 +65,8 @@ void Stereo_SGBM(){
     //Stereo disparity using Semi-global block matching algorithm
     StereoSGBM sgbm;
     Mat img1, img2;
-    //En caso de procesar la disparidad con imágenes más pequeñas
+
+    //En caso de querer escalar las imágenes de entrada
     if( scale != 1.f )
     {
         Mat temp1, temp2;
@@ -75,23 +76,21 @@ void Stereo_SGBM(){
         resize(right_frame, temp2, Size(), scale, scale, method);
         img2 = temp2;
     }
-
     else{
     	img1=left_frame;
     	img2=right_frame;
     }
 
     Size img_size = img1.size();
-    Rect roi1, roi2;
-    Mat Q;
+
+/**************************************************
+ * Parámetros del SGBM(Semi-Global Block matching)
+ *************************************************/
 
     numberOfDisparities = 16; //((img_size.width/8) + 15) & -16;	//Hace la primera operación y redondea haciendo el LSNibble cero (divisible entre 16)
-
     sgbm.preFilterCap = 63;
     sgbm.SADWindowSize = 5;
-
     int cn = img1.channels();
-
     sgbm.P1 = 8*cn*sgbm.SADWindowSize*sgbm.SADWindowSize;
     sgbm.P2 = 32*cn*sgbm.SADWindowSize*sgbm.SADWindowSize;
     sgbm.minDisparity = 1;
@@ -102,66 +101,89 @@ void Stereo_SGBM(){
     sgbm.disp12MaxDiff = 1;
     sgbm.fullDP = false;
 
+    //Matrices de disparidades
     Mat disp;	// Será del tipo CV_16SC1
 	Mat disp8;	//CV_8UC1
-	Mat dispu;	//CV_16UC1
-	Mat negative_disparities;
+
+	//Generamos la imagen de disparidades
     sgbm(img1, img2, disp);	//Ojo: disp tiene los valores de disparidades escalados por 16 para hacerlos enteros
+
+    //Identifico máximo y mínimo (para depurar)
     double min, max;
     cv::minMaxLoc(disp, &min, &max);
     cout<<"Minima disparidad: "<<min<<"\nMaxima disparidad: "<<max<<endl;
 
-    disp.convertTo(disp8, CV_8U);	//Trunca valores (solo lo uso para representar)
+    disp.convertTo(disp8, CV_8U);	//No trunca valores ya que el numberOfDisparities es 16
     imshow("Disparity image", disp8);
 
+    //Histogramas por filas y por columnas
     v_disparity=Mat::zeros(disp.rows,numberOfDisparities*16, CV_8U);
 	u_disparity=Mat::zeros(numberOfDisparities*16,disp.cols, CV_8U);
 
-	//u-disparity and v-disparity
-	//Compute each col histogram
+	//Calculamos u-disparity and v-disparity
 	uchar* d;
-	//int suma_px;
     for(int i = 0; i < disp8.rows; i++)
     {
-    	//suma_px=0;
-        d = disp8.ptr<uchar>(i);	//d[j] is the disparity indicated by the pixel
+        d = disp8.ptr<uchar>(i);	//d[j] es el valor de disparidad de ese pixel
         for (int j = 0; j < disp8.cols; j++)
         {
         	u_disparity.at<uchar>(d[j],j)++;
         	v_disparity.at<uchar>(i,d[j])++;
-
         }
     }
 
-    Mat u_treshold;
 
     imshow("v-disparity", v_disparity);
     imshow("u-disparity", u_disparity);
 
-    //cout<<Mat(u_disparity);
-    cout<<"Columnas de u-disparity"<<u_disparity.cols<<endl;
-    cout<<"Columnas de disparity 8 bits"<<disp8.cols<<endl;
-    cout<<(int)u_disparity.at<char>(300,1180)<<endl;
-    cout<<(int)u_disparity.at<char>(10,500)<<endl;
+
+
+/************************************************************
+ * Tratamiento de la u-disparity para identificar obstáculos
+ ************************************************************/
 
     Mat u_obstaculos;
-    Mat u_closed;
+    Mat u_dilated;
     Mat u_eroded;
-    
-    //Erosión de las líneas horizontales
-    
-    Mat element = getStructuringElement( MORPH_CROSS, Size(10,10), Point(5,5) );
-    morphologyEx( u_disparity, u_closed, MORPH_CLOSE, element );
-    
-    //Cierre para cerrar las nubes de puntos
-    Mat element = getStructuringElement( MORPH_CROSS, Size(10,10), Point(5,5) );
-    morphologyEx( u_disparity, u_closed, MORPH_CLOSE, element );
+    Mat u_edges;
 
-    threshold( u_closed, u_obstaculos, 60, 255,0 );
+    //Erosionar con un kernel vertical para eliminar lineas horizontales (carretera)
+    Mat element = getStructuringElement( MORPH_RECT, Size(1,3));
+    morphologyEx( u_disparity, u_eroded, MORPH_ERODE, element );
+    imshow("eroded_u-disparity", u_eroded);
 
-    imshow("closed_u-disparity", u_closed);
+    //Dilatación para cerrar las nubes de puntos
+    Mat element2 = getStructuringElement( MORPH_RECT, Size(3,5), Point(2,3) );
+    morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
+
+    //Binarizo
+    threshold( u_dilated, u_obstaculos, 20, 255,0 );
+
+
+    /**************************************************************
+     * Pruebas para sacar contornos (Detectar y separar obstáculos)
+     **************************************************************/
+    imshow("closed_u-disparity", u_dilated);
     imshow("obstaculos_u-disparity", u_obstaculos);
 
+    Mat element3 = getStructuringElement( MORPH_RECT, Size(3,3), Point(2,2) );
+    morphologyEx( u_dilated, u_edges, MORPH_DILATE, element3 );
+
+    u_edges = u_edges - u_dilated;
+
+    threshold( u_edges, u_edges, 5, 255,0 );
+    imshow("bordes_u-disparity", u_edges);
+
+    vector<vector<Point> > contours;
+    vector<Vec4i> hierarchy;
+    findContours(u_edges, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+
+    for (int contour=0;(contour<contours.size()); contour++){
+    	Scalar color(rand()&0xFF,rand()&0xFF,rand()&0xFF);
+    	drawContours(u_eroded, contours, contour, Scalar(255,255,255), 1, 8, hierarchy);
+    }
+
+    imshow("contornos_u-disparity", u_eroded);
 
 
 
