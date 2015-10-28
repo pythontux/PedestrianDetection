@@ -1,3 +1,9 @@
+/*************************************************************************************
+ * Pedestrian detection from moving vehicle using disparity image + HOG +SVM
+ * Author: Álvaro Gregorio Gómez
+ * Date: 28/10/2015
+ *************************************************************************************/
+
 //OpenCV libraries
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/objdetect/objdetect.hpp"
@@ -143,6 +149,7 @@ void Stereo_SGBM(){
  ************************************************************/
 
     Mat u_obstaculos;
+    Mat u_obstaculos_cierre;
     Mat u_dilated;
     Mat u_eroded;
     Mat u_edges;
@@ -153,20 +160,28 @@ void Stereo_SGBM(){
     imshow("eroded_u-disparity", u_eroded);
 
     //Dilatación para cerrar las nubes de puntos
-    Mat element2 = getStructuringElement( MORPH_RECT, Size(3,5), Point(2,3) );
+    Mat element2 = getStructuringElement( MORPH_RECT, Size(3,7), Point(2,4) );
     morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
 
     //Binarizo
     threshold( u_dilated, u_obstaculos, 20, 255,0 );
 
+    //Cierre para cerrar las nubes de puntos
+    Mat element4 = getStructuringElement( MORPH_RECT, Size(30,1));
+    morphologyEx( u_obstaculos, u_obstaculos_cierre, MORPH_CLOSE, element4 );
+
+    //Visualización
+    imshow("closed_u-disparity", u_dilated);
+    imshow("obstaculos_u-disparity", u_obstaculos);
+    imshow("obstaculos y cierre_u-disparity", u_obstaculos_cierre);
+
 
     /**************************************************************
      * Pruebas para sacar contornos (Detectar y separar obstáculos)
      **************************************************************/
-    imshow("closed_u-disparity", u_dilated);
-    imshow("obstaculos_u-disparity", u_obstaculos);
 
-    Mat element3 = getStructuringElement( MORPH_RECT, Size(3,3), Point(2,2) );
+
+   /* Mat element3 = getStructuringElement( MORPH_RECT, Size(3,5), Point(2,3) );
     morphologyEx( u_dilated, u_edges, MORPH_DILATE, element3 );
 
     u_edges = u_edges - u_dilated;
@@ -183,7 +198,7 @@ void Stereo_SGBM(){
     	drawContours(u_eroded, contours, contour, Scalar(255,255,255), 1, 8, hierarchy);
     }
 
-    imshow("contornos_u-disparity", u_eroded);
+    imshow("contornos_u-disparity", u_eroded);*/
 
 
 
