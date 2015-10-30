@@ -1,5 +1,4 @@
-/*************************************************************************************
- * Pedestrian detection from moving vehicle using disparity image + HOG +SVM
+* Pedestrian detection from moving vehicle using disparity image + HOG +SVM
  * Author: Álvaro Gregorio Gómez
  * Date: 28/10/2015
  *************************************************************************************/
@@ -142,11 +141,28 @@ void Stereo_SGBM(){
     imshow("v-disparity", v_disparity);
     imshow("u-disparity", u_disparity);
 
+    /**************************************************************
+     * Detección de perfil de carretera por Hough lines
+     **************************************************************/
+    Mat v_disparity_thresholded;
+    threshold( v_disparity, v_disparity_thresholded, 35, 127,0 );
 
+    vector<Vec4i> lines_v_disp;
+    HoughLinesP( v_disparity_thresholded, lines_v_disp, 8, CV_PI/16, 450, 100, 10 );
+    for( size_t i = 0; i < lines_v_disp.size(); i++ )
+    {
+    	if (lines_v_disp[i][0]!=lines_v_disp[i][2]){	//Evita las líneas verticales
+    		line( v_disparity_thresholded, Point(lines_v_disp[i][0], lines_v_disp[i][1]),
+    				Point(lines_v_disp[i][2], lines_v_disp[i][3]), Scalar(255,255,255), 1, 8 );
+    	}
+    }
 
-/************************************************************
- * Tratamiento de la u-disparity para identificar obstáculos
- ************************************************************/
+    namedWindow( "v-disparity Hough lines", 1 );
+    imshow( "v-disparity Hough lines", v_disparity_thresholded );
+
+	/************************************************************
+	 * Tratamiento de la u-disparity para identificar obstáculos
+	 ************************************************************/
 
     Mat u_obstaculos;
     Mat u_obstaculos_cierre;
@@ -160,11 +176,11 @@ void Stereo_SGBM(){
     imshow("eroded_u-disparity", u_eroded);
 
     //Dilatación para cerrar las nubes de puntos
-    Mat element2 = getStructuringElement( MORPH_RECT, Size(3,7), Point(2,4) );
+    Mat element2 = getStructuringElement( MORPH_RECT, Size(7,5), Point(4,3) );
     morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
 
     //Binarizo
-    threshold( u_dilated, u_obstaculos, 20, 255,0 );
+    threshold( u_eroded, u_obstaculos, 4, 255,0 );
 
     //Cierre para cerrar las nubes de puntos
     Mat element4 = getStructuringElement( MORPH_RECT, Size(30,1));
@@ -177,14 +193,48 @@ void Stereo_SGBM(){
 
 
     /**************************************************************
+     * Detección de obstáculos por Hough lines en u-sidparity
+     **************************************************************/
+    //Estimo edificios laterales si es que los hay
+    vector<Vec4i> lines_buildings;
+    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 70, 300, 40 );
+    for( size_t i = 0; i < lines_buildings.size(); i++ )
+    {
+    	//look for lines between 20 and 60 degrees
+    	if ((abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))<1.7) &&
+    			(abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))>0.05)){
+			line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
+				Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );
+    	}
+//		line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
+//			Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );
+    }
+
+    namedWindow( "Buildings Hough lines", 1 );
+    imshow( "Buildings Hough lines", u_disparity );
+
+    vector<Vec4i> lines_u_disp;
+    HoughLinesP( u_obstaculos, lines_u_disp, 20, CV_PI/16, 200, 35, 25 );
+    for( size_t i = 0; i < lines_u_disp.size(); i++ )
+    {
+        line( u_eroded, Point(lines_u_disp[i][0], lines_u_disp[i][1]),
+            Point(lines_u_disp[i][2], lines_u_disp[i][3]), Scalar(255,255,255), 1, 8 );
+    }
+
+    namedWindow( "u-disparity Hough lines", 1 );
+    imshow( "u-disparity Hough lines", u_eroded );
+
+
+
+    /**************************************************************
      * Pruebas para sacar contornos (Detectar y separar obstáculos)
      **************************************************************/
 
+/*
+    Mat element3 = getStructuringElement( MORPH_RECT, Size(3,5), Point(2,3) );
+    morphologyEx( u_obstaculos_cierre, u_edges, MORPH_DILATE, element3 );
 
-   /* Mat element3 = getStructuringElement( MORPH_RECT, Size(3,5), Point(2,3) );
-    morphologyEx( u_dilated, u_edges, MORPH_DILATE, element3 );
-
-    u_edges = u_edges - u_dilated;
+    u_edges = u_edges - u_obstaculos_cierre;
 
     threshold( u_edges, u_edges, 5, 255,0 );
     imshow("bordes_u-disparity", u_edges);
@@ -437,6 +487,8 @@ int main(int argc, char** argv){
 		}
 
 }
+
+
 
 
 
