@@ -1,4 +1,5 @@
-* Pedestrian detection from moving vehicle using disparity image + HOG +SVM
+/*************************************************************************************
+ * Pedestrian detection from moving vehicle using disparity image + HOG +SVM
  * Author: Álvaro Gregorio Gómez
  * Date: 28/10/2015
  *************************************************************************************/
@@ -193,22 +194,59 @@ void Stereo_SGBM(){
 
 
     /**************************************************************
-     * Detección de obstáculos por Hough lines en u-sidparity
+     * Detección de edificios por Hough lines en u-disparity
      **************************************************************/
     //Estimo edificios laterales si es que los hay
     vector<Vec4i> lines_buildings;
-    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 70, 300, 40 );
-    for( size_t i = 0; i < lines_buildings.size(); i++ )
+    static vector<Vec4i> buildings;	//Vector con máximo dos elementos (edificios)
+    static int frames_no_l_building = 0, frames_no_r_building = 0;
+    buildings.reserve(2);
+    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 70, 400, 40 );
+    bool left_found = false, right_found = false;
+    for( size_t i = 0; (i < lines_buildings.size()) && !left_found && !right_found; i++ )
     {
-    	//look for lines between 20 and 60 degrees
+    	//Dont look for horizontal nor vertical lines
     	if ((abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))<1.7) &&
     			(abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))>0.05)){
-			line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
-				Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );
+    		if(((lines_buildings[i][0] < (int)(u_disparity.cols/2.0)) || (lines_buildings[i][2] < (int)(u_disparity.cols/2.0))) && left_found == false){
+    			for (int a=0; a<4; a++){
+    				buildings[0][a] = lines_buildings[i][a];//Borde izquierdo de la carretera
+    			}
+    			left_found = true;
+    		}
+
+    		if(((lines_buildings[i][0] > (int)(u_disparity.cols/2.0)) || (lines_buildings[i][2] > (int)(u_disparity.cols/2.0)))&& right_found == false){
+    			for (int a=0; a<4; a++){
+    				buildings[1][a] = lines_buildings[i][a];	//Borde derecho de la carretera
+    			}
+    			right_found = true;
+    		}
     	}
-//		line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
-//			Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );
+
     }
+	if(!left_found)
+		frames_no_l_building++;
+	else
+		frames_no_l_building=0;
+	if(!right_found)
+		frames_no_r_building++;
+	else
+		frames_no_r_building=0;
+
+	if(frames_no_l_building>15)
+		buildings[0]=Scalar(0,0,0,0);
+	if(frames_no_r_building>15)
+		buildings[1]=Scalar(0,0,0,0);
+
+
+/*		line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
+		Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );*/
+	if(buildings[0]!=(Vec4i)Scalar(0,0,0,0))
+		line( u_disparity, Point(buildings[0][0], buildings[0][1]),
+				Point(buildings[0][2], buildings[0][3]), Scalar(255,255,255), 1, 8 );
+	if(buildings[0]!=(Vec4i)Scalar(0,0,0,0))
+		line( u_disparity, Point(buildings[1][0], buildings[1][1]),
+				Point(buildings[1][2], buildings[1][3]), Scalar(255,255,255), 1, 8 );
 
     namedWindow( "Buildings Hough lines", 1 );
     imshow( "Buildings Hough lines", u_disparity );
@@ -250,7 +288,9 @@ void Stereo_SGBM(){
 
     imshow("contornos_u-disparity", u_eroded);*/
 
-
+    /**************************************************************
+     * Código para guardar edificios y obstáculos
+     **************************************************************/
 
 
 }
@@ -487,9 +527,6 @@ int main(int argc, char** argv){
 		}
 
 }
-
-
-
 
 
 
