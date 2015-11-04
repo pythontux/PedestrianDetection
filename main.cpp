@@ -35,6 +35,9 @@
 #define VJ_DETECTION 2
 #define HOG_DETECTION 3
 
+//Parametres
+#define BUILDINGS_LINES_LIFE 15
+
 //Namespaces
 using namespace cv;
 using namespace std;
@@ -120,7 +123,7 @@ void Stereo_SGBM(){
     cout<<"Minima disparidad: "<<min<<"\nMaxima disparidad: "<<max<<endl;
 
     disp.convertTo(disp8, CV_8U);	//No trunca valores ya que el numberOfDisparities es 16
-    imshow("Disparity image", disp8);
+//    imshow("Disparity image", disp8);
 
     //Histogramas por filas y por columnas
     v_disparity=Mat::zeros(disp.rows,numberOfDisparities*16, CV_8U);
@@ -139,8 +142,8 @@ void Stereo_SGBM(){
     }
 
 
-    imshow("v-disparity", v_disparity);
-    imshow("u-disparity", u_disparity);
+//    imshow("v-disparity", v_disparity);
+//    imshow("u-disparity", u_disparity);
 
     /**************************************************************
      * Detección de perfil de carretera por Hough lines
@@ -158,21 +161,21 @@ void Stereo_SGBM(){
     	}
     }
 
-    namedWindow( "v-disparity Hough lines", 1 );
-    imshow( "v-disparity Hough lines", v_disparity_thresholded );
+//    namedWindow( "v-disparity Hough lines", 1 );
+//    imshow( "v-disparity Hough lines", v_disparity_thresholded );
 
 	/************************************************************
 	 * Tratamiento de la u-disparity para identificar obstáculos
 	 ************************************************************/
 
-    Mat u_obstaculos;
+    Mat u_obstaculos, u_obstaculos_no_cierre;
     Mat u_obstaculos_cierre;
     Mat u_dilated;
     Mat u_eroded;
     Mat u_edges;
 
     //Erosionar con un kernel vertical para eliminar lineas horizontales (carretera)
-    Mat element = getStructuringElement( MORPH_RECT, Size(1,3));
+    Mat element = getStructuringElement( MORPH_RECT, Size(1,4));
     morphologyEx( u_disparity, u_eroded, MORPH_ERODE, element );
     imshow("eroded_u-disparity", u_eroded);
 
@@ -181,27 +184,28 @@ void Stereo_SGBM(){
     morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
 
     //Binarizo
-    threshold( u_eroded, u_obstaculos, 4, 255,0 );
+    threshold( u_eroded, u_obstaculos, 5, 255,0 );
+    threshold( u_eroded, u_obstaculos_no_cierre, 5, 255,0 );
 
     //Cierre para cerrar las nubes de puntos
     Mat element4 = getStructuringElement( MORPH_RECT, Size(30,1));
     morphologyEx( u_obstaculos, u_obstaculos_cierre, MORPH_CLOSE, element4 );
 
     //Visualización
-    imshow("closed_u-disparity", u_dilated);
-    imshow("obstaculos_u-disparity", u_obstaculos);
-    imshow("obstaculos y cierre_u-disparity", u_obstaculos_cierre);
+//    imshow("obstaculos sin cierre u-disparity", u_obstaculos_no_cierre);
+//    imshow("obstaculos_u-disparity", u_obstaculos);
+//    imshow("obstaculos y cierre_u-disparity", u_obstaculos_cierre);
 
 
     /**************************************************************
-     * Detección de edificios por Hough lines en u-disparity
+     * Detección de edificios por Hough lines oblicuas en u-disparity
      **************************************************************/
     //Estimo edificios laterales si es que los hay
     vector<Vec4i> lines_buildings;
     static vector<Vec4i> buildings;	//Vector con máximo dos elementos (edificios)
     static int frames_no_l_building = 0, frames_no_r_building = 0;
     buildings.reserve(2);
-    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 70, 400, 40 );
+    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 65, 400, 40 );
     bool left_found = false, right_found = false;
     for( size_t i = 0; (i < lines_buildings.size()) && !left_found && !right_found; i++ )
     {
@@ -233,34 +237,92 @@ void Stereo_SGBM(){
 	else
 		frames_no_r_building=0;
 
-	if(frames_no_l_building>15)
+	if(frames_no_l_building>BUILDINGS_LINES_LIFE)
 		buildings[0]=Scalar(0,0,0,0);
-	if(frames_no_r_building>15)
+	if(frames_no_r_building>BUILDINGS_LINES_LIFE)
 		buildings[1]=Scalar(0,0,0,0);
 
 
-/*		line( u_disparity, Point(lines_buildings[i][0], lines_buildings[i][1]),
-		Point(lines_buildings[i][2], lines_buildings[i][3]), Scalar(255,255,255), 1, 8 );*/
+
+
+    /**************************************************************
+     * Parámetros de rectas definiendo edificios
+     * y=mx+b (l->left; r->right)
+     **************************************************************/
+    float m_l, b_l, m_r, b_r;
+
+    //m=(y2-y1)/(x2-x1)
+    //b=y1-m*x1
+
+    if(buildings[0]!=(Vec4i)Scalar(0,0,0,0)){
+        m_l=(buildings[0][3]-buildings[0][1])/float(buildings[0][2]-buildings[0][0]);
+        if(m_l>0){
+        	m_l=0;
+        	buildings[0]=Scalar(0,0,0,0);
+        }
+        b_l=buildings[0][1]-m_l*buildings[0][0];
+    }
+    else{
+    	m_l=0;
+    	b_l=0;
+    }
+
+    if(buildings[1]!=(Vec4i)Scalar(0,0,0,0)){
+    	m_r=(buildings[1][3]-buildings[1][1])/float(buildings[1][2]-buildings[1][0]);
+        if(m_r<0){
+        	m_r=0;
+        	buildings[1]=Scalar(0,0,0,0);
+        }
+    	b_r=buildings[1][1]-m_l*buildings[1][0];
+    }
+    else{
+    	m_r=0;
+    	b_r=0;
+    }
+
+    /**************************************************************
+     * Muestro las dos lineas de edificios si es que las hay
+     **************************************************************/
+
 	if(buildings[0]!=(Vec4i)Scalar(0,0,0,0))
 		line( u_disparity, Point(buildings[0][0], buildings[0][1]),
 				Point(buildings[0][2], buildings[0][3]), Scalar(255,255,255), 1, 8 );
-	if(buildings[0]!=(Vec4i)Scalar(0,0,0,0))
+	if(buildings[1]!=(Vec4i)Scalar(0,0,0,0))
 		line( u_disparity, Point(buildings[1][0], buildings[1][1]),
 				Point(buildings[1][2], buildings[1][3]), Scalar(255,255,255), 1, 8 );
 
-    namedWindow( "Buildings Hough lines", 1 );
-    imshow( "Buildings Hough lines", u_disparity );
+//    namedWindow( "Buildings Hough lines", 1 );
+//    imshow( "Buildings Hough lines", u_disparity );
 
-    vector<Vec4i> lines_u_disp;
-    HoughLinesP( u_obstaculos, lines_u_disp, 20, CV_PI/16, 200, 35, 25 );
-    for( size_t i = 0; i < lines_u_disp.size(); i++ )
-    {
-        line( u_eroded, Point(lines_u_disp[i][0], lines_u_disp[i][1]),
-            Point(lines_u_disp[i][2], lines_u_disp[i][3]), Scalar(255,255,255), 1, 8 );
+    /**************************************************************
+     * Detección de obstáculos por Hough lines horizontales en u-disparity
+     **************************************************************/
+
+    vector<Vec4i> lines_obstacles, obstacles;
+    obstacles.reserve(20);
+    int indice;
+    HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 150, 25, 25 );
+    for( size_t i = 0, indice=0; (i < lines_obstacles.size() && indice<20); i++ ){
+    	if(lines_obstacles[i][1] == lines_obstacles[i][3]){
+    		int y_bl, y_o, x_ol, y_br, x_or;	//b->Building	o->Obstacle
+    		y_o=lines_obstacles[i][1];
+
+    		x_ol=std::min(lines_obstacles[i][0], lines_obstacles[i][2]);	//topleft of the object
+    		x_or=std::max(lines_obstacles[i][0], lines_obstacles[i][2]);	//topright of the object
+
+    		y_bl=(int)(m_l*x_ol+b_l);
+    		y_br=(int)(m_r*x_or+b_r);
+
+
+    		if(((y_o>y_bl)||(!m_l && !b_l)) && ((y_o>y_br)||(!m_r && !b_r))){	//Ojo con las restricciones, darse cuenta de que el eje y de la imagen mira hacia abajo
+				line( u_disparity, Point(lines_obstacles[i][0], lines_obstacles[i][1]),
+					Point(lines_obstacles[i][2], lines_obstacles[i][3]), Scalar(255,255,255), 1, 8 );
+    		}
+    	}
     }
 
-    namedWindow( "u-disparity Hough lines", 1 );
-    imshow( "u-disparity Hough lines", u_eroded );
+    namedWindow( "obstacles Hough lines", 1 );
+    imshow( "obstacles Hough lines", u_disparity );
 
 
 
@@ -288,9 +350,6 @@ void Stereo_SGBM(){
 
     imshow("contornos_u-disparity", u_eroded);*/
 
-    /**************************************************************
-     * Código para guardar edificios y obstáculos
-     **************************************************************/
 
 
 }
@@ -385,7 +444,6 @@ void SaveImage(vector<Rect> pedestrian_vector, int detector, int num_pedestrian)
 		}
 	}
 }
-
 
 int main(int argc, char** argv){
 	//Window playing the sequence
@@ -527,6 +585,5 @@ int main(int argc, char** argv){
 		}
 
 }
-
 
 
