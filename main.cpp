@@ -1,7 +1,7 @@
 /*************************************************************************************
  * Pedestrian detection from moving vehicle using disparity image + HOG +SVM
  * Author: Álvaro Gregorio Gómez
- * Date: 28/10/2015
+ * Date: 04/11/2015
  *************************************************************************************/
 
 //OpenCV libraries
@@ -37,6 +37,8 @@
 
 //Parametres
 #define BUILDINGS_LINES_LIFE 15
+#define NEIGHBOURHOOD_OBSTACLE_X 200
+#define NEIGHBOURHOOD_OBSTACLE_Y 20
 
 //Namespaces
 using namespace cv;
@@ -242,9 +244,6 @@ void Stereo_SGBM(){
 	if(frames_no_r_building>BUILDINGS_LINES_LIFE)
 		buildings[1]=Scalar(0,0,0,0);
 
-
-
-
     /**************************************************************
      * Parámetros de rectas definiendo edificios
      * y=mx+b (l->left; r->right)
@@ -299,11 +298,12 @@ void Stereo_SGBM(){
      **************************************************************/
 
     vector<Vec4i> lines_obstacles, obstacles;
-    obstacles.reserve(20);
+    obstacles.reserve(40);
     int indice;
     HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 150, 25, 25 );
-    for( size_t i = 0, indice=0; (i < lines_obstacles.size() && indice<20); i++ ){
-    	if(lines_obstacles[i][1] == lines_obstacles[i][3]){
+    for( size_t i = 0, indice=0; (i < lines_obstacles.size() && indice<40); i++ ){
+    	if((lines_obstacles[i][1] == lines_obstacles[i][3]) && (lines_obstacles[i]!=(Vec4i)Scalar(0,0,0,0))){
+    		//Calculo de puntos de lineas de objeto y edificios
     		int y_bl, y_o, x_ol, y_br, x_or;	//b->Building	o->Obstacle
     		y_o=lines_obstacles[i][1];
 
@@ -313,16 +313,33 @@ void Stereo_SGBM(){
     		y_bl=(int)(m_l*x_ol+b_l);
     		y_br=(int)(m_r*x_or+b_r);
 
-
+    		//Comprobación de que están por debajo de las lineas de la carretera
     		if(((y_o>y_bl)||(!m_l && !b_l)) && ((y_o>y_br)||(!m_r && !b_r))){	//Ojo con las restricciones, darse cuenta de que el eje y de la imagen mira hacia abajo
-				line( u_disparity, Point(lines_obstacles[i][0], lines_obstacles[i][1]),
-					Point(lines_obstacles[i][2], lines_obstacles[i][3]), Scalar(255,255,255), 1, 8 );
+				obstacles[indice]=lines_obstacles[i];
+
+				line( u_disparity, Point(obstacles[indice][0], obstacles[indice][1]),
+					Point(obstacles[indice][2], obstacles[indice][3]), Scalar(255,255,255), 1, 8 );
+
+				//Pongo a cero lineas cercanas
+				for(int j=0; j < lines_obstacles.size();j++){
+					//Busco todas las líneas horizontales, diferentes de cero y a una distancia menor de 15+15 y las marco como cero
+					if((lines_obstacles[j][1] == lines_obstacles[j][3]) && (lines_obstacles[j]!=(Vec4i)Scalar(0,0,0,0)) && (lines_obstacles[j]!=lines_obstacles[i])){
+						if((abs(lines_obstacles[j][1]-lines_obstacles[i][1])<NEIGHBOURHOOD_OBSTACLE_Y)&& (abs(lines_obstacles[j][0]-lines_obstacles[i][0])<NEIGHBOURHOOD_OBSTACLE_X) && (abs(lines_obstacles[j][2]-lines_obstacles[i][2])<NEIGHBOURHOOD_OBSTACLE_X)){
+							lines_obstacles[j]=Scalar(0,0,0,0);
+						}
+					}
+				}
+				indice++;
     		}
     	}
     }
 
     namedWindow( "obstacles Hough lines", 1 );
     imshow( "obstacles Hough lines", u_disparity );
+
+    /*************************************************************
+     * Reduzco el número de líneas asociando líneas cercanas
+     ************************************************************/
 
 
 
