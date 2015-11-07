@@ -70,7 +70,7 @@ int ReturnFrame(VideoCapture capture, Mat &img){
     return 0;
 }
 
-void Stereo_SGBM(){
+int Stereo_SGBM(vector<Rect> &ROI_disparity){
     int SADWindowSize = 0, numberOfDisparities;
     float scale = 1.f ;
     //Stereo disparity using Semi-global block matching algorithm
@@ -144,27 +144,46 @@ void Stereo_SGBM(){
     }
 
 
-//    imshow("v-disparity", v_disparity);
+    imshow("v-disparity", v_disparity);
 //    imshow("u-disparity", u_disparity);
 
     /**************************************************************
      * Detección de perfil de carretera por Hough lines
      **************************************************************/
-    Mat v_disparity_thresholded;
-    threshold( v_disparity, v_disparity_thresholded, 35, 127,0 );
+    Mat v_disparity_thresholded, v_disparity_thresholded_opened, v_disparity_thresholded_final;
+    threshold( v_disparity, v_disparity_thresholded, 20, 127,0 );	//threshold anterior: 35
+
+    //Erosion con un kernel horizontal para eliminar lineas verticales (obstáculos)
+    Mat element_v_erode = getStructuringElement( MORPH_RECT, Size(7,1));
+    morphologyEx( v_disparity_thresholded, v_disparity_thresholded_opened, MORPH_ERODE, element_v_erode );
+
+    //Dilatacion con un kernel rectangular para juntar línea carretera
+    Mat element_v_close = getStructuringElement( MORPH_RECT, Size(7,7));
+    morphologyEx( v_disparity_thresholded_opened, v_disparity_thresholded_final, MORPH_DILATE, element_v_close );
+
 
     vector<Vec4i> lines_v_disp;
-    HoughLinesP( v_disparity_thresholded, lines_v_disp, 8, CV_PI/16, 450, 100, 10 );
-    for( size_t i = 0; i < lines_v_disp.size(); i++ )
+    static float m_s, b_s;	//y=mx+b ecuacion de la carretera
+    bool equation_set=false;
+    HoughLinesP( v_disparity_thresholded_final, lines_v_disp, 8, CV_PI/18, 900, 130, 10 );
+    for( size_t i = 0; (i < lines_v_disp.size() && !equation_set); i++ )
     {
     	if (lines_v_disp[i][0]!=lines_v_disp[i][2]){	//Evita las líneas verticales
     		line( v_disparity_thresholded, Point(lines_v_disp[i][0], lines_v_disp[i][1]),
     				Point(lines_v_disp[i][2], lines_v_disp[i][3]), Scalar(255,255,255), 1, 8 );
+    		//Calculo provisionalmente la pendiente y b con la primera recta que aparezca
+    		m_s=(lines_v_disp[i][3]-lines_v_disp[i][1])/float(lines_v_disp[i][2]-lines_v_disp[i][0]);
+    		b_s=lines_v_disp[i][1]-m_s*lines_v_disp[i][0];
+    		equation_set=true;
+
     	}
     }
+    namedWindow( "v-disparity Hough lines", 1 );
+    imshow( "v-disparity Hough lines", v_disparity_thresholded );
+    namedWindow( "v-disparity opened Hough lines", 1 );
+    imshow( "v-disparity opened Hough lines", v_disparity_thresholded_final );
 
-//    namedWindow( "v-disparity Hough lines", 1 );
-//    imshow( "v-disparity Hough lines", v_disparity_thresholded );
+
 
 	/************************************************************
 	 * Tratamiento de la u-disparity para identificar obstáculos
@@ -298,10 +317,10 @@ void Stereo_SGBM(){
      **************************************************************/
 
     vector<Vec4i> lines_obstacles, obstacles;
-    obstacles.reserve(40);
-    int indice;
+    obstacles.reserve(30);
+    int indice=0;
     HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 150, 25, 25 );
-    for( size_t i = 0, indice=0; (i < lines_obstacles.size() && indice<40); i++ ){
+    for( size_t i = 0; (i < lines_obstacles.size() && indice<30); i++ ){
     	if((lines_obstacles[i][1] == lines_obstacles[i][3]) && (lines_obstacles[i]!=(Vec4i)Scalar(0,0,0,0))){
     		//Calculo de puntos de lineas de objeto y edificios
     		int y_bl, y_o, x_ol, y_br, x_or;	//b->Building	o->Obstacle
@@ -315,7 +334,10 @@ void Stereo_SGBM(){
 
     		//Comprobación de que están por debajo de las lineas de la carretera
     		if(((y_o>y_bl)||(!m_l && !b_l)) && ((y_o>y_br)||(!m_r && !b_r))){	//Ojo con las restricciones, darse cuenta de que el eje y de la imagen mira hacia abajo
-				obstacles[indice]=lines_obstacles[i];
+				//obstacles[indice]=lines_obstacles[i];
+    			for (int a=0; a<4; a++){
+    				obstacles[indice][a] = lines_obstacles[i][a];//Array de obstáculos
+    			}
 
 				line( u_disparity, Point(obstacles[indice][0], obstacles[indice][1]),
 					Point(obstacles[indice][2], obstacles[indice][3]), Scalar(255,255,255), 1, 8 );
@@ -333,9 +355,51 @@ void Stereo_SGBM(){
     		}
     	}
     }
+    int n_obstacles = indice;
 
     namedWindow( "obstacles Hough lines", 1 );
     imshow( "obstacles Hough lines", u_disparity );
+
+
+    cout<<"n_obstacles: "<<n_obstacles<<endl;
+
+    /********************************************************************************************
+     * Sacar límites verticales del objeto en la v-disparity y guardar toda la info en vect<Rect>
+     ********************************************************************************************/
+
+    int y_base, y_top, x_left, x_right;
+    vector<Rect> ROI_disparity_inside_function;
+    ROI_disparity_inside_function.reserve(30);
+    for(int i=0; i<n_obstacles; i++){
+
+    	int disparidad_objeto, h;
+    	int j;
+    	//disparidad y h cogeremos los máximos valores
+    	//h es la altura en px
+    	disparidad_objeto = obstacles[i][1];	//La disparidad es directamente el eje y de la u-disparity
+    	h = (int)u_disparity.at<uchar>(obstacles[i][0], obstacles[i][1]);	//Lo inicializo a un valor cualquiera
+    	//Cojo el máximo valor de disparidad (límite inferior mas bajo)
+    	for(j=(int)std::min(obstacles[i][0], obstacles[i][2]);j<=(int)std::max(obstacles[i][0], obstacles[i][2]);j++){
+
+    	    h = (int)std::max((int)u_disparity.at<uchar>(j, obstacles[i][1]), h);
+    	}
+    	//Calculo el valor de la base de la caja mediante la ecuación del perfil de la carretera y el valor de disparidad (x->disparidad)
+    	//y=mx+b
+    	y_base=(int)(m_s*disparidad_objeto+b_s);
+    	if (y_base>disp8.rows){
+    		y_base = disp8.rows;	//Trunco para evitar valores mayores que la dimension vertical (ver forma de la recta en la v-disparity)
+    	}
+    	y_top=y_base-h;
+    	if (y_top<0){
+    		y_top = 0;	//Trunco para evitar valores negativos debidos a mala estimacion Hough
+    	}
+    	x_left=std::min(obstacles[i][0], obstacles[i][2]);
+		x_right=std::max(obstacles[i][0], obstacles[i][2]);
+    	//Creo el rectángulo que define la ROI
+    	ROI_disparity[i]=Rect(x_left, y_top, (x_right-x_left), h);
+    	cout<<"ROIs"<<ROI_disparity[i]<<endl;
+    }
+    return n_obstacles;
 
     /*************************************************************
      * Reduzco el número de líneas asociando líneas cercanas
@@ -424,12 +488,12 @@ void DetectPedestrianHOGnotROI(vector<Rect> &pedestrian_vector, HOGDescriptor ho
 			hog.detectMultiScale(left_frame, pedestrian_vector, 0, Size(8,8), Size(0,0),1.05, 2);
 }
 
-void DrawPedestrians(vector<Rect> pedestrian_vector){
+void DrawPedestrians(vector<Rect> &pedestrian_vector, int n_ROI){
 	/*Dibuja el rectángulo alrededor del supuesto peatón en la ventana de vídeo
 	 * Le pasamos como parámetro el frame y el vector de rectángulos de peatones
 	 */
 	size_t a;
-	for( a = 0; a < pedestrian_vector.size(); a++ ){
+	for( a = 0; a < n_ROI; a++ ){
 		//Point Bottom_Right( (pedestrian[a].x + pedestrian[a].width), (pedestrian[a].y + pedestrian[a].height) );
 		rectangle(left_frame, pedestrian_vector[a], Scalar(255,255,255), 1,8,0);
 		//printf("Coordenada x: %d \t Coordenada y: %d \n",pedestrian[a].x,pedestrian[a].y);
@@ -480,6 +544,10 @@ int main(int argc, char** argv){
 	vector<Rect> pedestrianVJ;	//Rectangles around each pedestrian (Viola-Jones Module)
 	vector<Rect> pedestrian;	//Rectangles around each pedestrian (HOG module)
 
+	vector<Rect> ROI_disparity;
+	ROI_disparity.reserve(30);
+	int n_ROI;
+
 #ifdef SAMPLE_IMAGE
 	int num_pedestrian_VJ=0, num_pedestrian_VJ_HOG=0, num_pedestrian_HOG;
     if( argc == 1 )
@@ -509,7 +577,7 @@ int main(int argc, char** argv){
 //	num_pedestrian_VJ+=pedestrianVJ.size();
 //	num_pedestrian_VJ_HOG+=pedestrian.size();
     //num_pedestrian_HOG+=pedestrian.size();
-	Stereo_SGBM();
+	Stereo_SGBM(ROI_disparity);
     while(1){
 #endif
 
@@ -590,7 +658,8 @@ int main(int argc, char** argv){
 			//num_pedestrian_VJ+=pedestrianVJ.size();
 			//num_pedestrian_VJ_HOG+=pedestrian.size();
 		    //num_pedestrian_HOG+=pedestrian.size();
-		    Stereo_SGBM();
+		    n_ROI = Stereo_SGBM(ROI_disparity);
+		    DrawPedestrians(ROI_disparity, n_ROI);
 
 #endif
 
@@ -599,6 +668,9 @@ int main(int argc, char** argv){
 			int c = waitKey(10);
 			if( (char)c == 27 )
 				return 0;
+			else if((char)c == 's'){	//s stops playing the video
+				int c = waitKey(0);
+			}
 		}
 
 }
