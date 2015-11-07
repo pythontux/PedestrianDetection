@@ -196,13 +196,14 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     Mat u_edges;
 
     //Erosionar con un kernel vertical para eliminar lineas horizontales (carretera)
-    Mat element = getStructuringElement( MORPH_RECT, Size(1,4));
+    Mat element = getStructuringElement( MORPH_RECT, Size(1,5));
     morphologyEx( u_disparity, u_eroded, MORPH_ERODE, element );
     imshow("eroded_u-disparity", u_eroded);
 
     //Dilatación para cerrar las nubes de puntos
-    Mat element2 = getStructuringElement( MORPH_RECT, Size(7,5), Point(4,3) );
+    Mat element2 = getStructuringElement( MORPH_RECT, Size(7,5));
     morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
+    imshow("eroded_dilated_u-disparity", u_dilated);
 
     //Binarizo
     threshold( u_eroded, u_obstaculos, 5, 255,0 );
@@ -213,7 +214,7 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     morphologyEx( u_obstaculos, u_obstaculos_cierre, MORPH_CLOSE, element4 );
 
     //Visualización
-//    imshow("obstaculos sin cierre u-disparity", u_obstaculos_no_cierre);
+    imshow("obstaculos cierre u-disparity", u_obstaculos);
 //    imshow("obstaculos_u-disparity", u_obstaculos);
 //    imshow("obstaculos y cierre_u-disparity", u_obstaculos_cierre);
 
@@ -319,7 +320,7 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     vector<Vec4i> lines_obstacles, obstacles;
     obstacles.reserve(30);
     int indice=0;
-    HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 150, 25, 25 );
+    HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 150, 25, 25 );	//u_obstacles threshold 150
     for( size_t i = 0; (i < lines_obstacles.size() && indice<30); i++ ){
     	if((lines_obstacles[i][1] == lines_obstacles[i][3]) && (lines_obstacles[i]!=(Vec4i)Scalar(0,0,0,0))){
     		//Calculo de puntos de lineas de objeto y edificios
@@ -380,8 +381,12 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     	h = (int)u_disparity.at<uchar>(obstacles[i][0], obstacles[i][1]);	//Lo inicializo a un valor cualquiera
     	//Cojo el máximo valor de disparidad (límite inferior mas bajo)
     	for(j=(int)std::min(obstacles[i][0], obstacles[i][2]);j<=(int)std::max(obstacles[i][0], obstacles[i][2]);j++){
-
-    	    h = (int)std::max((int)u_disparity.at<uchar>(j, obstacles[i][1]), h);
+    		//Considero la maxima altura en un vecindario vertical para tolerancia a un desplazamiento de la recta
+    		for(int p=-15;p<=15;p++){
+    			if((obstacles[i+p][1]>0) && (obstacles[i+p][1]<u_disparity.rows)){
+    				h = (int)std::max((int)u_disparity.at<uchar>(j, obstacles[i+p][1]), h);
+    			}
+    		}
     	}
     	//Calculo el valor de la base de la caja mediante la ecuación del perfil de la carretera y el valor de disparidad (x->disparidad)
     	//y=mx+b
