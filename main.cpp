@@ -1,5 +1,5 @@
 /*************************************************************************************
- * Pedestrian detection from moving vehicle using disparity image + HOG +SVM
+* Pedestrian detection from moving vehicle using disparity image + HOG +SVM
  * Author: Álvaro Gregorio Gómez
  * Date: 04/11/2015
  *************************************************************************************/
@@ -38,8 +38,10 @@
 //Parametres
 #define BUILDINGS_LINES_LIFE 15
 #define NEIGHBOURHOOD_OBSTACLE_X 200
-#define NEIGHBOURHOOD_OBSTACLE_Y 20
-#define MAX_U_DISPARITY_NEIGHBOURHOOD 25
+#define NEIGHBOURHOOD_OBSTACLE_Y 30
+#define MAX_U_DISPARITY_NEIGHBOURHOOD 200 //De las 65536 disparidades
+#define HEIGHT_OVERSIZE 100
+
 
 //Namespaces
 using namespace cv;
@@ -52,10 +54,11 @@ CascadeClassifier pedestrian_cascade;
 
 Mat ROI;
 Mat left_frame;	//Frame
+Mat left_color_frame;
 Mat right_frame;	//Frame
-Mat rgb_frame;
 Mat v_disparity;
 Mat u_disparity;
+
 
 int ReturnFrame(VideoCapture capture, Mat &img){
 	/*-----------------------------------------------------------
@@ -87,7 +90,7 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     Size img_size = img1.size();
 
 // Parámetros del SGBM(Semi-Global Block matching)
-    int numberOfDisparities = 16; //((img_size.width/8) + 15) & -16;	//Hace la primera operación y redondea haciendo el LSNibble cero (divisible entre 16)
+    int numberOfDisparities = 128; //((img_size.width/8) + 15) & -16;	//Hace la primera operación y redondea haciendo el LSNibble cero (divisible entre 16)
     sgbm.preFilterCap = 63;
     sgbm.SADWindowSize = 5;
     int cn = img1.channels();
@@ -105,8 +108,10 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     Mat disp;	// Será del tipo CV_16SC1
 	Mat disp8;	//CV_8UC1
 
+
 	//Generamos la imagen de disparidades
-    sgbm(img1, img2, disp);	//disp tiene los valores de disparidades escalados por 16 para hacerlos enteros
+    sgbm(img1, img2, disp);	//disp tiene los valores de disparidades escalados por 16
+    disp.convertTo(disp, CV_16U);
     disp.convertTo(disp8, CV_8U);
 
     //Identifico máximo y mínimo (para depurar)
@@ -115,47 +120,74 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     cout<<"Minima disparidad: "<<min<<"\nMaxima disparidad: "<<max<<endl;
 
     //Histogramas por filas y por columnas
-    v_disparity=Mat::zeros(disp.rows,numberOfDisparities*16, CV_8U);
-	u_disparity=Mat::zeros(numberOfDisparities*16,disp.cols, CV_8U);
+
+    v_disparity=Mat::zeros(disp.rows,numberOfDisparities*16, CV_16U);
+	u_disparity=Mat::zeros(numberOfDisparities*16,disp.cols, CV_16U);
+
+/*
+	cout<<"disp(0,72)"<<disp.at<ushort>(0,72)<<endl;
+	cout<<"disp(0,73)"<<disp.at<ushort>(0,73)<<endl;
+	cout<<"disp(0,74)"<<disp.at<ushort>(0,74)<<endl;
+	cout<<"disp(0,75)"<<disp.at<ushort>(0,75)<<endl;
+	cout<<"disp(0,638)"<<disp.at<ushort>(0,638)<<endl;
+	cout<<"disp(20,638)"<<disp.at<ushort>(20,638)<<endl;
+*/
 
 	//Calculamos u-disparity and v-disparity
-	uchar* d;
-    for(int i = 0; i < disp8.rows; i++)
+	ushort* d;
+    for(int i = 0; i < disp.rows; i++)
     {
-        d = disp8.ptr<uchar>(i);	//d[j] es el valor de disparidad de ese pixel
-        for (int j = 0; j < disp8.cols; j++)
+        d = disp.ptr<ushort>(i);	//d[j] es el valor de disparidad de ese pixel
+        for (int j = 0; j < disp.cols; j++)
         {
-        	u_disparity.at<uchar>(d[j],j)++;
-        	v_disparity.at<uchar>(i,d[j])++;
+//        	cout<<"d[j]"<<d[j]<<endl;
+//        	cout<<"disp(i,j)"<<disp.at<ushort>(i,j)<<endl;
+        	v_disparity.at<ushort>(i,(d[j]))++;
+        	u_disparity.at<ushort>((d[j]),j)++;
         }
     }
 
-    imshow("v-disparity", v_disparity);
-//    imshow("u-disparity", u_disparity);
+
+    //As u and v-disparities have a lot of rows and cols, I resize in order to print them
+
+    Mat v_disparity8;
+	Mat u_disparity8;
+    Mat v_disparity8print;
+	Mat u_disparity8print;
+
+	v_disparity.convertTo(v_disparity8, CV_8U);//, 255/65535.0);
+	u_disparity.convertTo(u_disparity8, CV_8U);//, 255/65535.0);
+
+	//Las imágenes que muestro, las redimensiono
+	resize(u_disparity8, u_disparity8print, Size(), 1,0.5);
+	resize(v_disparity8, v_disparity8print, Size(), 0.5,1);
+
+
+    imshow("v-disparity", v_disparity8);
+    imshow("u-disparity", u_disparity8);
+    imshow("disparity", disp8);
+
 
     /**************************************************************
      * Detección de perfil de carretera por Hough lines
      **************************************************************/
     Mat v_disparity_thresholded, v_disparity_thresholded_opened, v_disparity_thresholded_final;
-    threshold( v_disparity, v_disparity_thresholded, 20, 127,0 );	//threshold anterior: 35
+    threshold( v_disparity8, v_disparity_thresholded, 3, 127,0 );	//threshold anterior: 35
 
     //Erosion con un kernel horizontal para eliminar lineas verticales (obstáculos)
-    Mat element_v_erode = getStructuringElement( MORPH_RECT, Size(7,1));
-    morphologyEx( v_disparity_thresholded, v_disparity_thresholded_opened, MORPH_ERODE, element_v_erode );
+    Mat element_v_erode = getStructuringElement( MORPH_RECT, Size(2,1));
+    morphologyEx( v_disparity_thresholded, v_disparity_thresholded_final, MORPH_ERODE, element_v_erode );
 
-    //Dilatacion con un kernel rectangular para juntar línea carretera
-    Mat element_v_close = getStructuringElement( MORPH_RECT, Size(7,7));
-    morphologyEx( v_disparity_thresholded_opened, v_disparity_thresholded_final, MORPH_DILATE, element_v_close );
 
     //Extracción del perfil y dibujo del mismo sobre v-disparity
     vector<Vec4i> lines_v_disp;
     static float m_s, b_s;	//y=mx+b ecuacion de la carretera
     bool equation_set=false;
-    HoughLinesP( v_disparity_thresholded_final, lines_v_disp, 8, CV_PI/18, 900, 130, 10 );
+    HoughLinesP( v_disparity_thresholded_final, lines_v_disp, 8, CV_PI/18, 250, 900, 10 );
     for( size_t i = 0; (i < lines_v_disp.size() && !equation_set); i++ )
     {
     	if (lines_v_disp[i][0]!=lines_v_disp[i][2]){	//Evita las líneas verticales
-    		line( v_disparity_thresholded, Point(lines_v_disp[i][0], lines_v_disp[i][1]),
+    		line( v_disparity_thresholded_final, Point(lines_v_disp[i][0], lines_v_disp[i][1]),
     				Point(lines_v_disp[i][2], lines_v_disp[i][3]), Scalar(255,255,255), 1, 8 );
     		//Calculo provisionalmente la pendiente y b con la primera recta que aparezca
     		m_s=(lines_v_disp[i][3]-lines_v_disp[i][1])/float(lines_v_disp[i][2]-lines_v_disp[i][0]);
@@ -163,11 +195,11 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     		equation_set=true;
     	}
     }
+    Mat v_disparity_thresholded_print;
+    resize(v_disparity_thresholded_final, v_disparity_thresholded_print, Size(), 0.5,1);
 
-    namedWindow( "v-disparity Hough lines", 1 );
-    imshow( "v-disparity Hough lines", v_disparity_thresholded );
-    namedWindow( "v-disparity opened Hough lines", 1 );
-    imshow( "v-disparity opened Hough lines", v_disparity_thresholded_final );
+    //imshow( "v-disparity Hough lines", v_disparity_thresholded_print );
+
 
 
 
@@ -181,26 +213,23 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     Mat u_eroded;
     Mat u_edges;
 
+
+
     //Erosionar con un kernel vertical para eliminar lineas horizontales (carretera)
-    Mat element = getStructuringElement( MORPH_RECT, Size(1,5));
-    morphologyEx( u_disparity, u_eroded, MORPH_ERODE, element );
-    imshow("eroded_u-disparity", u_eroded);
+    Mat element = getStructuringElement( MORPH_RECT, Size(1,4));
+    morphologyEx( u_disparity8, u_eroded, MORPH_ERODE, element );
+    //imshow("eroded_u-disparity", u_eroded);
 
     //Dilatación para cerrar las nubes de puntos
-    Mat element2 = getStructuringElement( MORPH_RECT, Size(7,5));
+    Mat element2 = getStructuringElement( MORPH_RECT, Size(3,1));
     morphologyEx( u_eroded, u_dilated, MORPH_DILATE, element2 );
-    imshow("eroded_dilated_u-disparity", u_dilated);
+    //imshow("eroded_dilated_u-disparity", u_dilated);
+
 
     //Binarizo
-    threshold( u_eroded, u_obstaculos, 5, 255,0 );
-    threshold( u_eroded, u_obstaculos_no_cierre, 5, 255,0 );
+    threshold( u_dilated, u_obstaculos, 4, 127,0 );
 
-    //Cierre para cerrar las nubes de puntos
-    Mat element4 = getStructuringElement( MORPH_RECT, Size(30,1));
-    morphologyEx( u_obstaculos, u_obstaculos_cierre, MORPH_CLOSE, element4 );
 
-    //Visualización
-    imshow("obstaculos cierre u-disparity", u_obstaculos);
 
     /**************************************************************
      * Detección de edificios por Hough lines oblicuas en u-disparity
@@ -210,13 +239,12 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     static vector<Vec4i> buildings;	//Vector con máximo dos elementos (edificios)
     static int frames_no_l_building = 0, frames_no_r_building = 0;
     buildings.reserve(2);
-    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 65, 400, 40 );
+    HoughLinesP( u_obstaculos, lines_buildings, 5, CV_PI/30, 9, 550, 150 );
     bool left_found = false, right_found = false;
     for( size_t i = 0; (i < lines_buildings.size()) && !left_found && !right_found; i++ )
     {
     	//Dont look for horizontal nor vertical lines
-    	if ((abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))<1.7) &&
-    			(abs((lines_buildings[i][1]-lines_buildings[i][3])/double(lines_buildings[i][0]-lines_buildings[i][2]))>0.05)){
+    	if ((lines_buildings[i][0]!=lines_buildings[i][2]) && ((lines_buildings[i][1]!=lines_buildings[i][3]) )){
     		if(((lines_buildings[i][0] < (int)(u_disparity.cols/2.0)) || (lines_buildings[i][2] < (int)(u_disparity.cols/2.0))) && left_found == false){
     			for (int a=0; a<4; a++){
     				buildings[0][a] = lines_buildings[i][a];//Borde izquierdo de la carretera
@@ -286,11 +314,22 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
      **************************************************************/
 
 	if(buildings[0]!=(Vec4i)Scalar(0,0,0,0))
-		line( u_disparity, Point(buildings[0][0], buildings[0][1]),
+		line( u_disparity8, Point(buildings[0][0], buildings[0][1]),
 				Point(buildings[0][2], buildings[0][3]), Scalar(255,255,255), 1, 8 );
+		line( u_obstaculos, Point(buildings[0][0], buildings[0][1]),
+			Point(buildings[0][2], buildings[0][3]), Scalar(255,255,255), 1, 8 );
+
 	if(buildings[1]!=(Vec4i)Scalar(0,0,0,0))
-		line( u_disparity, Point(buildings[1][0], buildings[1][1]),
+		line( u_disparity8, Point(buildings[1][0], buildings[1][1]),
 				Point(buildings[1][2], buildings[1][3]), Scalar(255,255,255), 1, 8 );
+	line( u_obstaculos, Point(buildings[1][0], buildings[1][1]),
+			Point(buildings[1][2], buildings[1][3]), Scalar(255,255,255), 1, 8 );
+
+    Mat u_obstaculos_print;
+
+
+    //imshow( "Buildings Hough lines", u_obstaculos_print );
+
 
     /**************************************************************
      * Detección de obstáculos por Hough lines horizontales en u-disparity
@@ -299,7 +338,7 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     vector<Vec4i> lines_obstacles, obstacles;
     obstacles.reserve(30);
     int indice=0;
-    HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 120, 25, 40 );	//u_obstacles threshold 150
+    HoughLinesP( u_obstaculos, lines_obstacles, 20, CV_PI/16, 50, 25, 60 );
     for( size_t i = 0; (i < lines_obstacles.size() && indice<30); i++ ){
     	if((lines_obstacles[i][1] == lines_obstacles[i][3]) && (lines_obstacles[i]!=(Vec4i)Scalar(0,0,0,0))){
     		//Calculo de puntos de lineas de objeto y edificios
@@ -319,32 +358,36 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     				obstacles[indice][a] = lines_obstacles[i][a];//Array de obstáculos
     			}
 
-				line( u_disparity, Point(obstacles[indice][0], obstacles[indice][1]),
-					Point(obstacles[indice][2], obstacles[indice][3]), Scalar(255,255,255), 1, 8 );
+
 
 				//Pongo a cero lineas cercanas
 				for(int j=0; j < lines_obstacles.size();j++){
-					//Busco todas las líneas horizontales, diferentes de cero y a una distancia menor de 15+15 y las marco como cero
+					//Busco todas las líneas horizontales, diferentes de cero y a una distancia menor de vecindario(defines) y las marco como cero
 					if((lines_obstacles[j][1] == lines_obstacles[j][3]) && (lines_obstacles[j]!=(Vec4i)Scalar(0,0,0,0)) && (lines_obstacles[j]!=lines_obstacles[i])){
 						if((abs(lines_obstacles[j][1]-lines_obstacles[i][1])<NEIGHBOURHOOD_OBSTACLE_Y)&& (abs(lines_obstacles[j][0]-lines_obstacles[i][0])<NEIGHBOURHOOD_OBSTACLE_X) && (abs(lines_obstacles[j][2]-lines_obstacles[i][2])<NEIGHBOURHOOD_OBSTACLE_X)){
 							//Si son más grandes las substituyo por la actual
 							if(abs(lines_obstacles[j][0]-lines_obstacles[j][2])>abs(lines_obstacles[i][0]-lines_obstacles[i][2])){
 								obstacles[indice]=lines_obstacles[j];
 							}
-							else{
+							else{	//Si no las elimino, para asegurarme de no volverlas a coger
 								lines_obstacles[j]=Scalar(0,0,0,0);
 							}
 						}
 					}
 				}
+				line( u_obstaculos, Point(obstacles[indice][0], obstacles[indice][1]),
+					Point(obstacles[indice][2], obstacles[indice][3]), Scalar(255,255,255), 1, 8 );
 				indice++;
     		}
     	}
     }
     int n_obstacles = indice;	//Contador de número de obstáculos
 
-    namedWindow( "obstacles Hough lines", 1 );
-    imshow( "obstacles Hough lines", u_disparity );
+
+    imshow( "obstacles Hough lines", u_disparity8 );
+    //Visualización
+    resize(u_obstaculos, u_obstaculos_print, Size(), 1, 0.5);
+    imshow("obstaculos y cierre u-disparity", u_obstaculos_print);
 
 
     cout<<"n_obstacles: "<<n_obstacles<<endl;
@@ -358,19 +401,24 @@ int Stereo_SGBM(vector<Rect> &ROI_disparity){
     ROI_disparity_inside_function.reserve(30);
     for(int i=0; i<n_obstacles; i++){
 
-    	int disparidad_objeto, h;
+    	int disparidad_objeto, h, suma_columna, max_in_line;
     	int j;
     	//Cogeremos los máximos valores para disparidad y h
     	//h es la altura en px
     	disparidad_objeto = obstacles[i][1];	//La disparidad es directamente el eje y de la u-disparity
     	h = (int)u_disparity.at<uchar>(obstacles[i][0], obstacles[i][1]);	//Lo inicializo a un valor cualquiera
+    	max_in_line=h;
     	//Cojo el máximo valor de disparidad (límite inferior mas bajo)
     	for(j=(int)std::min(obstacles[i][0], obstacles[i][2]);j<=(int)std::max(obstacles[i][0], obstacles[i][2]);j++){
-    		//Considero la maxima altura en un vecindario vertical para tolerancia a un desplazamiento de la recta
+    		//Sumo las maxima altura en un vecindario vertical (Probablemente pertenecientes al objeto
     		for(int p=-MAX_U_DISPARITY_NEIGHBOURHOOD;p<=MAX_U_DISPARITY_NEIGHBOURHOOD;p++){
-    			if((obstacles[i+p][1]>0) && (obstacles[i+p][1]<u_disparity.rows)){
-    				h = (int)std::max((int)u_disparity.at<uchar>(j, obstacles[i+p][1]), h);
+    			suma_columna=0;
+    			if(((obstacles[i][1]+p)>0) && ((obstacles[i][1]+p)<u_disparity.rows)){	//Compruebo que el punto esté en la imágen
+    				suma_columna = (int)u_disparity.at<uchar>(j, obstacles[i][1]+p)+suma_columna;
     			}
+    		}
+    		if(suma_columna>h){
+    			h=suma_columna+HEIGHT_OVERSIZE;
     		}
     	}
 
@@ -455,7 +503,7 @@ void DrawPedestrians(vector<Rect> &pedestrian_vector, int n_ROI){
 	size_t a;
 	for( a = 0; a < n_ROI; a++ ){
 		//Point Bottom_Right( (pedestrian[a].x + pedestrian[a].width), (pedestrian[a].y + pedestrian[a].height) );
-		rectangle(left_frame, pedestrian_vector[a], Scalar(255,255,255), 1,8,0);
+		rectangle(left_color_frame, pedestrian_vector[a], Scalar(0,255,0), 1,8,0);
 		//printf("Coordenada x: %d \t Coordenada y: %d \n",pedestrian[a].x,pedestrian[a].y);
 	}
 }
@@ -488,10 +536,6 @@ void SaveImage(vector<Rect> pedestrian_vector, int detector, int num_pedestrian)
 
 int main(int argc, char** argv){
 	//Window playing the sequence
-	namedWindow( "Debug window", WINDOW_AUTOSIZE );
-    namedWindow("Disparity image", WINDOW_AUTOSIZE);
-    namedWindow("v-disparity", WINDOW_AUTOSIZE);
-    namedWindow("u-disparity", WINDOW_AUTOSIZE);
 
 	//Open Cascade Classifier
 	if( !pedestrian_cascade.load( pedestrian_cascade_name ) ){ printf("--(!)Error loading pedestrian cascade\n"); return -1; };
@@ -588,8 +632,9 @@ int main(int argc, char** argv){
 			sprintf(image_number,"%010d",i);
 			cout<<path<<image_number<<".png"<<endl;
 			image_name_left=path+"left/"+(string)image_number+".png";
-			image_name_right=path+"right/"+(string)image_number+".png";
+			image_name_right=path+"right_old/"+(string)image_number+".png";
 			left_frame = imread(image_name_left.c_str(), IMREAD_GRAYSCALE);
+			left_color_frame = imread(image_name_left.c_str(), CV_LOAD_IMAGE_COLOR);
 			right_frame = imread(image_name_right.c_str(), IMREAD_GRAYSCALE);
 			printf("Image cols %d \t",left_frame.cols);
 			printf("Image rows %d\n",left_frame.rows);
@@ -624,7 +669,8 @@ int main(int argc, char** argv){
 #endif
 
 
-			imshow( "Debug window", left_frame );
+
+			imshow( "Debug window", left_color_frame );
 			int c = waitKey(10);
 			if( (char)c == 27 )
 				return 0;
@@ -634,5 +680,4 @@ int main(int argc, char** argv){
 		}
 
 }
-
 
